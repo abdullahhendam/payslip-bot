@@ -1,14 +1,12 @@
 """
 بوت تيليجرام لإرسال فيش القبض
-يحتاج:
-  - employees.xlsx  (ملف بيانات الموظفين)
-  - payslips.pdf    (ملف الفيش الشهري)
-ضع الملفين في نفس مجلد السكريبت
+يحمل الملفات أوتوماتيك من Google Drive
 """
 
 import re
 import io
 import logging
+import requests
 import pandas as pd
 import pdfplumber
 import fitz  # PyMuPDF
@@ -19,11 +17,13 @@ from telegram.ext import (
 )
 
 # ─── إعدادات ────────────────────────────────────────────────
-BOT_TOKEN  = "8743584646:AAHN2TIMN47GkMLHayZSy4RK0EkdxQ8ssB8"
-EXCEL_FILE = "employees.xlsx"
-PDF_FILE   = "payslips.pdf"
-MAX_TRIES  = 3      # عدد محاولات الرقم السري قبل الحظر
-BLOCK_SECS = 300    # مدة الحظر بالثواني (5 دقائق)
+BOT_TOKEN      = "8743584646:AAHN2TIMN47GkMLHayZSy4RK0EkdxQ8ssB8"
+EXCEL_FILE     = "employees.xlsx"
+PDF_FILE       = "payslips.pdf"
+EXCEL_DRIVE_ID = "1qxe6coEUVkaJYYNbUDjmrZxOq3F1Cu6m"
+PDF_DRIVE_ID   = "1kv-esc-QJ3kP-bPw0x_zdu2hoROqrbFT"
+MAX_TRIES      = 3
+BLOCK_SECS     = 300
 
 # ─── مراحل المحادثة ──────────────────────────────────────────
 ASK_CODE, ASK_PIN = range(2)
@@ -35,6 +35,31 @@ logging.basicConfig(
     encoding="utf-8"
 )
 logger = logging.getLogger(__name__)
+
+
+# ─── تحميل الملفات من Google Drive ──────────────────────────
+def download_from_drive(file_id: str, dest_path: str):
+    """تحميل ملف من Google Drive"""
+    URL = "https://drive.google.com/uc?export=download"
+    session = requests.Session()
+    response = session.get(URL, params={"id": file_id}, stream=True)
+    
+    # لو الملف كبير Google بيطلب confirm
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith("download_warning"):
+            token = value
+            break
+    
+    if token:
+        response = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
+    
+    with open(dest_path, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+    
+    logger.info(f"تم تحميل {dest_path} من Google Drive")
 
 
 # ─── تحميل البيانات ──────────────────────────────────────────
@@ -60,7 +85,6 @@ def load_employees():
 
 
 def build_pdf_map():
-    """خريطة: كود الموظف -> (رقم الصفحة، موضع الظرف 0/1/2)"""
     emp_map = {}
     with pdfplumber.open(PDF_FILE) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
@@ -82,7 +106,6 @@ def build_pdf_map():
 
 
 def extract_slip(page_num: int, position: int) -> bytes:
-    """استخراج ظرف الموظف فقط (position: 0=أول، 1=تاني، 2=تالت)"""
     src = fitz.open(PDF_FILE)
     page = src[page_num - 1]
     h = page.rect.height
@@ -101,6 +124,9 @@ def extract_slip(page_num: int, position: int) -> bytes:
 
 # ─── تحميل عند البدء ─────────────────────────────────────────
 try:
+    logger.info("جاري تحميل الملفات من Google Drive...")
+    download_from_drive(EXCEL_DRIVE_ID, EXCEL_FILE)
+    download_from_drive(PDF_DRIVE_ID, PDF_FILE)
     EMPLOYEES = load_employees()
     PDF_MAP   = build_pdf_map()
 except Exception as e:
@@ -189,7 +215,7 @@ async def receive_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     page_num, position = PDF_MAP[code]
     name = EMPLOYEES[code]['name']
-    logger.info(f"User {user_id} - Code {code} - Name {name} - Page {page_num} Pos {position} - SENT")
+    logger.info(f"User {user_id} - Code {code} - Name {name} - Page {page_num} - SENT")
 
     await update.message.reply_text(f"✅ مرحباً {name}!\nجاري إرسال فيش القبض...")
 
