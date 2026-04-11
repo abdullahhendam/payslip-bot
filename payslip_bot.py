@@ -50,7 +50,7 @@ def load_employees():
     df = pd.read_excel(EXCEL_FILE, header=header_row)
     employees = {}
     for _, row in df.iterrows():
-        code = str(row.get('الكود', '')).strip()
+        code = str(int(float(row.get("الكود", 0)))).strip() if str(row.get("الكود", "")) != "nan" else ""
         pin  = str(row.get('الرقم السري', '')).strip()
         name = str(row.get('الاسم', '')).strip()
         if code and code != 'nan' and pin and pin != 'nan':
@@ -73,7 +73,7 @@ def build_pdf_map():
             ]
             for pos, section in enumerate(thirds):
                 text = section.extract_text() or ''
-                codes = re.findall(r'\b([0-9]{3,4})\b', text)
+                codes = re.findall(r'\b([0-9]{3,5})\b', text)
                 for code in codes:
                     if code != '2026' and len(code) >= 3 and code not in emp_map:
                         emp_map[code] = (page_num, pos)
