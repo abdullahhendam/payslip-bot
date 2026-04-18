@@ -153,6 +153,30 @@ except Exception as e:
 user_state: dict = {}
 
 
+
+def find_code_by_phone(phone_raw: str):
+    """دور على كود الموظف بأي شكل للرقم"""
+    # تنظيف الرقم
+    phone = phone_raw.strip().replace(' ', '').replace('-', '')
+    # استخراج آخر 9 أرقام (بدون الصفر الأول أو كود الدولة)
+    digits = phone.lstrip('+').lstrip('0')
+    if digits.startswith('20'):
+        digits = digits[2:]  # إزالة 20
+    digits = digits[-9:]  # آخر 9 أرقام
+
+    # تجربة كل الأشكال الممكنة
+    variants = [
+        phone,           # كما هو
+        '0' + digits,    # 01xxxxxxxxx
+        '20' + digits,   # 201xxxxxxxxx
+        '+20' + digits,  # +201xxxxxxxxx
+        '2' + '0' + digits,  # 201xxxxxxxxx بدون +
+    ]
+    for v in variants:
+        if v in PHONE_MAP:
+            return PHONE_MAP[v]
+    return None
+
 # ─── هاندلرز ──────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
