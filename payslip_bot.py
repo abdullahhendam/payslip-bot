@@ -47,11 +47,13 @@ def load_employees():
     df = pd.read_excel(EXCEL_FILE, header=header_row)
     employees = {}
     phone_map = {}  # رقم الموبايل -> كود الموظف
+
     for _, row in df.iterrows():
-        raw_code = row.get('الكود', '')
-        raw_pin  = row.get('الرقم السري', '')
-        raw_name = row.get('الاسم', '')
+        raw_code  = row.get('الكود', '')
+        raw_pin   = row.get('الرقم السري', '')
+        raw_name  = row.get('الاسم', '')
         raw_phone = row.get('رقم الموبايل', '')
+
         try:
             code = str(int(float(str(raw_code)))).strip()
         except:
@@ -60,20 +62,26 @@ def load_employees():
             pin = str(int(float(str(raw_pin)))).strip()
         except:
             pin = str(raw_pin).strip()
-        name = str(raw_name).strip()
+
+        name  = str(raw_name).strip()
         phone = str(raw_phone).strip().replace(' ', '').replace('-', '')
+
         if code and code != 'nan' and pin and pin != 'nan':
             employees[code] = {'pin': pin, 'name': name, 'phone': phone}
+
             if phone and phone != 'nan':
-                # حفظ بأشكال مختلفة للرقم
-                phone_map[phone] = code
-                if phone.startswith('0'):
-                    phone_map['2' + phone[1:]] = code
-                    phone_map['+2' + phone[1:]] = code
-                if phone.startswith('20'):
-                    phone_map['0' + phone[2:]] = code
-                if phone.startswith('+20'):
-                    phone_map['0' + phone[3:]] = code
+                # استخراج آخر 9 أرقام (الرقم بدون كود الدولة)
+                digits_only = ''.join(filter(str.isdigit, phone))
+                last9 = digits_only[-9:] if len(digits_only) >= 9 else digits_only
+
+                # حفظ كل الأشكال الممكنة للرقم
+                phone_map[phone]           = code  # كما هو في الإكسيل
+                phone_map[digits_only]     = code  # أرقام فقط
+                phone_map['0'   + last9]   = code  # 01XXXXXXXXX
+                phone_map['20'  + last9]   = code  # 201XXXXXXXXX
+                phone_map['+20' + last9]   = code  # +201XXXXXXXXX
+                phone_map[last9]           = code  # 1XXXXXXXXX (آخر 9)
+
     logger.info(f"تم تحميل {len(employees)} موظف")
     return employees, phone_map
 
@@ -153,28 +161,28 @@ except Exception as e:
 user_state: dict = {}
 
 
+def get_phone_variants(phone_raw: str) -> list:
+    """إرجاع كل الأشكال الممكنة لرقم الموبايل"""
+    phone = phone_raw.strip()
+    digits_only = ''.join(filter(str.isdigit, phone))
+    last9 = digits_only[-9:] if len(digits_only) >= 9 else digits_only
+    return [
+        phone,
+        digits_only,
+        '0'   + last9,
+        '20'  + last9,
+        '+20' + last9,
+        last9,
+    ]
+
 
 def find_code_by_phone(phone_raw: str):
     """دور على كود الموظف بأي شكل للرقم"""
-    # تنظيف الرقم - شيل كل المسافات والشرطات والـ+
-    phone = phone_raw.strip().replace(' ', '').replace('-', '').replace(' ', '')
-    # استخراج الأرقام فقط
-    digits_only = ''.join(filter(str.isdigit, phone))
-    # آخر 9 أرقام (الرقم المصري بدون كود الدولة)
-    last9 = digits_only[-9:]
-
-    # تجربة كل الأشكال الممكنة
-    variants = [
-        phone,
-        digits_only,
-        '0' + last9,
-        '20' + last9,
-        '+20' + last9,
-    ]
-    for v in variants:
-        if v in PHONE_MAP:
-            return PHONE_MAP[v]
+    for variant in get_phone_variants(phone_raw):
+        if variant in PHONE_MAP:
+            return PHONE_MAP[variant]
     return None
+
 
 # ─── هاندلرز ──────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,7 +191,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["📄 استلام فيش القبض"],
         ["🔑 معرفة الكود وكلمة السر"]
     ]
-    # لو أدمن، يظهر له خيار إضافي
     if user_id in ADMIN_IDS:
         keyboard.append(["👤 عرض بيانات موظف (أدمن)"])
 
@@ -288,15 +295,23 @@ async def receive_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لم يتم استلام رقم الموبايل. حاول مرة أخرى.")
         return ConversationHandler.END
 
-    phone = contact.phone_number.replace('+', '').replace(' ', '')
-    # تجربة أشكال مختلفة للرقم
+    phone_raw = contact.phone_number.strip()
+    digits_only = ''.join(filter(str.isdigit, phone_raw))
+    last9 = digits_only[-9:] if len(digits_only) >= 9 else digits_only
+
+    variants = get_phone_variants(phone_raw)
+
     code = None
-    for variant in [phone, '0' + phone[-9:], '20' + phone[-9:], '+20' + phone[-9:]]:
+    for variant in variants:
         if variant in PHONE_MAP:
             code = PHONE_MAP[variant]
             break
 
     if not code:
+        logger.warning(
+            f"Phone not found | Raw: {phone_raw} | Digits: {digits_only} | "
+            f"Last9: {last9} | Tried: {variants}"
+        )
         await update.message.reply_text(
             "❌ رقم موبايلك مش موجود في السجلات.\nتواصل مع HR.",
             reply_markup=ReplyKeyboardRemove()
@@ -304,7 +319,7 @@ async def receive_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     emp = EMPLOYEES[code]
-    logger.info(f"Contact lookup - Phone {phone} - Code {code} - Name {emp['name']}")
+    logger.info(f"Contact lookup - Phone {phone_raw} - Code {code} - Name {emp['name']}")
     await update.message.reply_text(
         f"✅ تم التعرف عليك!\n\n"
         f"👤 الاسم: {emp['name']}\n"
@@ -327,14 +342,23 @@ async def admin_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لم يتم استلام رقم الموبايل.")
         return ConversationHandler.END
 
-    phone = contact.phone_number.replace('+', '').replace(' ', '')
+    phone_raw = contact.phone_number.strip()
+    digits_only = ''.join(filter(str.isdigit, phone_raw))
+    last9 = digits_only[-9:] if len(digits_only) >= 9 else digits_only
+
+    variants = get_phone_variants(phone_raw)
+
     code = None
-    for variant in [phone, '0' + phone[-9:], '20' + phone[-9:], '+20' + phone[-9:]]:
+    for variant in variants:
         if variant in PHONE_MAP:
             code = PHONE_MAP[variant]
             break
 
     if not code:
+        logger.warning(
+            f"Admin lookup - Phone not found | Raw: {phone_raw} | Digits: {digits_only} | "
+            f"Last9: {last9} | Tried: {variants}"
+        )
         await update.message.reply_text(
             "❌ الرقم مش موجود في السجلات.",
             reply_markup=ReplyKeyboardRemove()
@@ -342,6 +366,7 @@ async def admin_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     emp = EMPLOYEES[code]
+    logger.info(f"Admin lookup - Phone {phone_raw} - Code {code} - Name {emp['name']}")
     await update.message.reply_text(
         f"📋 بيانات الموظف:\n\n"
         f"👤 الاسم: {emp['name']}\n"
